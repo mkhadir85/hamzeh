@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enterprise M365 TCO Architect V6</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <style>
+        body { background-color: #f0f2f5; font-size: 0.9rem; }
+        .sidebar { background-color: white; border-right: 1px solid #ddd; height: 100vh; overflow-y: auto; padding: 20px; box-shadow: 2px 0 5px rgba(0,0,0,0.05); }
+        .main-pane { height: 100vh; overflow-y: auto; padding: 20px; }
+        .table-container { max-height: 60vh; overflow-y: auto; border: 1px solid #ddd; background: white; border-radius: 8px; margin-bottom: 20px; }
+        th { position: sticky; top: 0; background-color: #0f243e !important; color: #ffffff !important; z-index: 2; font-size: 0.85rem; text-align: center; border-right: 1px solid #4a5c71;}
+        td { vertical-align: middle; }
+        .entity-col { position: sticky; left: 0; background-color: #f8f9fa !important; z-index: 1; font-weight: bold; border-right: 2px solid #ccc;}
+        .percent-select { width: 65px; text-align: center; font-size: 0.80rem; border: 1px solid #ccc; border-radius: 4px; padding: 2px; cursor: pointer; }
+        .percent-select:focus { border-color: #0d6efd; outline: none; }
+        .btn-custom { font-weight: bold; letter-spacing: 0.5px; }
+        .hidden { display: none !important; }
+        #errorBox { display: none; }
+        .chart-container { background: white; padding: 15px; border-radius: 8px; border: 1px solid #ddd; height: 350px; display: none; }
+        .manual-price-box { background: #f8f9fa; padding: 10px; border-radius: 5px; border: 1px solid #e9ecef; margin-bottom: 15px; max-height: 200px; overflow-y: auto; }
+        .manual-price-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; font-size: 0.8rem; }
+        .manual-price-input { width: 70px; text-align: right; padding: 2px; border: 1px solid #ccc; border-radius: 3px; }
+    </style>
+</head>
+<body>
+
+<div class="container-fluid p-0">
+    <div class="row g-0">
+        <!-- LEFT PANE: Configuration -->
+        <div class="col-md-3 sidebar">
+            <h4 class="text-primary fw-bold mb-4">TCO Architect V6</h4>
+
+            <div class="alert alert-danger" id="errorBox">
+                <strong>Error:</strong> <span id="errorText"></span>
+            </div>
+
+            <label class="form-label fw-bold text-secondary mb-1">1. Upload List (.xlsx/.csv)</label>
+            <input type="file" id="uploadFile" class="form-control form-control-sm mb-3" accept=".xlsx, .xls, .csv" onchange="readUploadedFile()">
+
+            <label class="form-label fw-bold text-secondary mb-1">2. Target Column</label>
+            <select id="calcBase" class="form-select form-select-sm mb-3">
+                <option value="Total Mailboxes">Total Mailboxes</option>
+                <option value="Active (90 Days)">Active (90 Days)</option>
+            </select>
+
+            <label class="form-label fw-bold text-secondary mb-1">3. Pricing Tier</label>
+            <select id="priceTier" class="form-select form-select-sm mb-2" onchange="toggleManualPrices()">
+                <option value="1">ERP Price (List)</option>
+                <option value="0.95">ERP - 5% Discount</option>
+                <option value="0.90">ERP - 10% Discount</option>
+                <option value="manual">Manual Entry</option>
+            </select>
+
+            <div id="manualPriceContainer" class="manual-price-box hidden">
+                <div class="fw-bold text-secondary mb-2 border-bottom pb-1" style="font-size:0.85rem;">Custom Prices (JOD)</div>
+                <div id="manualPriceInputs"></div>
+            </div>
+
+            <label class="form-label fw-bold text-secondary mb-1">4. Distribution Strategy</label>
+            <select id="calcMode" class="form-select form-select-sm mb-4" onchange="toggleViewMode()">
+                <option value="auto">Automatic (300 Rule)</option>
+                <option value="manual">Manual Percentages</option>
+            </select>
+
+            <div class="d-grid gap-2 mb-4">
+                <button class="btn btn-primary btn-custom" onclick="calculateTCO()">Run Calculation</button>
+                <button class="btn btn-success btn-custom" onclick="exportBeautifulExcel()">Export Executive Excel</button>
+            </div>
+            
+            <hr>
+            <label class="form-label fw-bold text-secondary mb-1">Project Management</label>
+            <div class="d-grid gap-2">
+                <button class="btn btn-outline-secondary btn-sm" onclick="saveProjectLocally()">Save Work Locally (.json)</button>
+                <input type="file" id="loadProjectFile" class="form-control form-control-sm" accept=".json" onchange="loadProjectLocally()">
+                <button class="btn btn-danger btn-sm mt-2" onclick="resetAll()">Reset All</button>
+            </div>
+        </div>
+
+        <!-- RIGHT PANE: Workspace -->
+        <div class="col-md-9 main-pane">
+            <div class="card mb-3 shadow-sm border-0">
+                <div class="card-body py-2 px-4 bg-white rounded">
+                    <div class="row text-center fw-bold fs-5">
+                        <div class="col-md-3">Y1: <span id="totY1" class="text-primary">0 JOD</span></div>
+                        <div class="col-md-3">Y2: <span id="totY2" class="text-primary">0 JOD</span></div>
+                        <div class="col-md-3">Y3: <span id="totY3" class="text-primary">0 JOD</span></div>
+                        <div class="col-md-3">TCO: <span id="tot3Y" class="text-danger">0 JOD</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VIEW 1: Manual Per Entity Entry Grid -->
+            <div id="manualEntryView" class="hidden">
+                <h5 class="text-secondary fw-bold mb-3">Manual Strategy: Define Percentages</h5>
+                <div class="table-container">
+                    <table class="table table-bordered table-sm table-hover m-0" id="manualInputTable">
+                        <thead>
+                            <tr id="manualInputHeaders">
+                                <th class="entity-col" style="color: white !important;">Entity Name</th>
+                                <th style="color: white !important;">Seats</th>
+                                <!-- License Headers -->
+                            </tr>
+                        </thead>
+                        <tbody id="manualInputBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- VIEW 2: Final Results Output -->
+            <div id="resultsView">
+                <h5 class="text-secondary fw-bold mb-2">Calculated Financial Output</h5>
+                <div class="table-container">
+                    <table class="table table-striped table-hover table-sm align-middle m-0" id="resultsTable">
+                        <thead>
+                            <tr>
+                                <th class="entity-col" style="color: white !important;">Entity Name</th>
+                                <th style="color: white !important;">Seats</th>
+                                <th style="color: white !important;">License Distribution</th>
+                                <th style="color: white !important;">Y1 Cost</th>
+                                <th style="color: white !important;">Y2 Cost</th>
+                                <th style="color: white !important;">Y3 Cost</th>
+                                <th style="color: white !important;">Total TCO</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resultsBody">
+                            <tr><td colspan="7" class="text-center text-muted py-5">Upload a file or run calculation to see results</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div id="chartContainer" class="chart-container">
+                    <canvas id="tcoChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const defaultPrices = {
+        "Exchange Online Kiosk": 17, "Exchange Online Plan 1": 34, "Exchange Online Plan 2": 68,
+        "M365 Business Basic": 60, "M365 Standard": 120, "M365 Premium": 188,
+        "Office E1": 120, "Office E3": 220, "Office E5": 350, "M365 E3": 332, "M365 E5": 510
+    };
+
+    let rawData = [];
+    let calculatedResults = [];
+    let grandTotals = { y1: 0, y2: 0, y3: 0, tco: 0 };
+    let dashboardChart = null;
+
+    window.onload = function() {
+        const headerRow = document.getElementById('manualInputHeaders');
+        const priceInputsBox = document.getElementById('manualPriceInputs');
+        
+        Object.keys(defaultPrices).forEach(lic => {
+            const th = document.createElement('th');
+            th.innerText = lic.replace("Exchange Online", "EXO").replace("Business", "");
+            th.style.color = "white"; 
+            th.title = lic;
+            headerRow.appendChild(th);
+
+            priceInputsBox.innerHTML += `
+                <div class="manual-price-row">
+                    <span>${lic}</span>
+                    <input type="number" id="price_${lic.replace(/\s+/g, '')}" class="manual-price-input" value="${defaultPrices[lic]}">
+                </div>`;
+        });
+    };
+
+    function showError(msg) {
+        document.getElementById('errorText').innerText = msg;
+        document.getElementById('errorBox').style.display = 'block';
+    }
+    function hideError() { document.getElementById('errorBox').style.display = 'none'; }
+
+    function toggleManualPrices() {
+        const tier = document.getElementById('priceTier').value;
+        const box = document.getElementById('manualPriceContainer');
+        if (tier === 'manual') box.classList.remove('hidden');
+        else box.classList.add('hidden');
+    }
+
+    function toggleViewMode() {
+        const mode = document.getElementById('calcMode').value;
+        if (mode === 'manual') {
+            document.getElementById('manualEntryView').classList.remove('hidden');
+            document.getElementById('resultsView').classList.add('hidden');
+            buildManualInputGrid();
+        } else {
+            document.getElementById('manualEntryView').classList.add('hidden');
+            document.getElementById('resultsView').classList.remove('hidden');
+        }
+    }
+
+    function generatePercentageOptions(currentVal) {
+        let options = '';
+        for(let i = 0; i <= 100; i += 5) {
+            let selected = (i === currentVal) ? 'selected' : '';
+            options += `<option value="${i}" ${selected}>${i}%</option>`;
+        }
+        return options;
+    }
+
+    function readUploadedFile() {
+        const file = document.getElementById('uploadFile').files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                const workbook = XLSX.read(new Uint8Array(e.target.result), {type: 'array'});
+                rawData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], {defval: 0});
+                
+                rawData = rawData.map((row, index) => {
+                    return {
+                        id: 'entity_' + index,
+                        entityName: row['ArabicName'] || row['Arabic Name'] || `Entity ${index}`,
+                        totalMailboxes: parseInt(row['Total Mailboxes']) || 0,
+                        activeMailboxes: parseInt(row['Active (90 Days)']) || 0,
+                        percentages: {}
+                    };
+                }).filter(r => r.entityName && (r.totalMailboxes > 0 || r.activeMailboxes > 0));
+
+                if(document.getElementById('calcMode').value === 'manual') buildManualInputGrid();
+                else document.getElementById('resultsBody').innerHTML = `<tr><td colspan="7" class="text-center text-success py-4">File Loaded! Click "Run Calculation".</td></tr>`;
+            } catch (err) { showError("Failed to read file."); }
+        };
+        reader.readAsArrayBuffer(file);
+    }
+
+    function buildManualInputGrid() {
+        const tbody = document.getElementById('manualInputBody');
+        tbody.innerHTML = "";
+        const baseCol = document.getElementById('calcBase').value === 'Total Mailboxes' ? 'totalMailboxes' : 'activeMailboxes';
+        
+        rawData.forEach(row => {
+            let tr = document.createElement('tr');
+            tr.innerHTML = `<td class="entity-col">${row.entityName}</td><td class="text-center bg-light">${row[baseCol]}</td>`;
+            Object.keys(defaultPrices).forEach(lic => {
+                let currentVal = row.percentages[lic] || 0;
+                tr.innerHTML += `<td class="text-center"><select class="percent-select" onchange="savePct('${row.id}', '${lic}', this.value)">${generatePercentageOptions(currentVal)}</select></td>`;
+            });
+            tbody.appendChild(tr);
+        });
+    }
+
+    function savePct(rowId, licName, val) {
+        let row = rawData.find(r => r.id === rowId);
+        if(row) row.percentages[licName] = parseInt(val) || 0;
+    }
+
+    function getActivePrices() {
+        let prices = {};
+        const tier = document.getElementById('priceTier').value;
+        if (tier === 'manual') {
+            Object.keys(defaultPrices).forEach(lic => {
+                let val = parseFloat(document.getElementById(`price_${lic.replace(/\s+/g, '')}`).value);
+                prices[lic] = isNaN(val) ? 0 : val;
+            });
+        } else {
+            const mult = parseFloat(tier);
+            Object.keys(defaultPrices).forEach(lic => { prices[lic] = defaultPrices[lic] * mult; });
+        }
+        return prices;
+    }
+
+    function calculateTCO() {
+        if (rawData.length === 0) { showError("Please upload a file first."); return; }
+        
+        const mode = document.getElementById('calcMode').value;
+        const baseCol = document.getElementById('calcBase').value === 'Total Mailboxes' ? 'totalMailboxes' : 'activeMailboxes';
+        const activePrices = getActivePrices();
+        
+        calculatedResults = [];
+        grandTotals = { y1: 0, y2: 0, y3: 0, tco: 0 };
+        const tbody = document.getElementById('resultsBody');
+        tbody.innerHTML = "";
+
+        let chartLabels = [];
+        let chartDataTCO = [];
+
+        rawData.forEach(row => {
+            let seats = row[baseCol];
+            if (seats <= 0) return;
+
+            let alloc = {};
+            if (mode === 'auto') {
+                let kiosk = Math.round(seats * 0.10);
+                let p1 = Math.round(seats * 0.80);
+                let remainder = seats - kiosk - p1;
+                alloc["Exchange Online Kiosk"] = kiosk;
+                alloc["Exchange Online Plan 1"] = p1;
+                
+                if (remainder <= 300) alloc["M365 Standard"] = remainder;
+                else {
+                    alloc["M365 Standard"] = 300;
+                    alloc["Office E3"] = remainder - 300;
+                }
+            } else {
+                Object.keys(defaultPrices).forEach(lic => {
+                    let pct = row.percentages[lic] || 0;
+                    if (pct > 0) alloc[lic] = Math.round(seats * (pct / 100));
+                });
+            }
+
+            let cost = 0;
+            let text = "";
+            Object.keys(alloc).forEach(lic => {
+                if (alloc[lic] > 0) {
+                    cost += alloc[lic] * activePrices[lic];
+                    text += `<span class="badge bg-secondary mb-1">${alloc[lic]}x ${lic.replace("Exchange Online", "EXO")}</span><br>`;
+                }
+            });
+
+            let tco = cost * 3;
+            grandTotals.y1 += cost; grandTotals.y2 += cost; grandTotals.y3 += cost; grandTotals.tco += tco;
+
+            calculatedResults.push({ entity: row.entityName, seats: seats, alloc: alloc, y1: cost, y2: cost, y3: cost, tco: tco });
+            chartLabels.push(row.entityName);
+            chartDataTCO.push(tco);
+
+            tbody.innerHTML += `
+                <tr>
+                    <td class="entity-col">${row.entityName}</td>
+                    <td class="text-center">${seats}</td>
+                    <td>${text}</td>
+                    <td>${cost.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                    <td>${cost.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                    <td>${cost.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                    <td class="fw-bold text-danger">${tco.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                </tr>`;
+        });
+
+        document.getElementById('totY1').innerText = grandTotals.y1.toLocaleString() + " JOD";
+        document.getElementById('totY2').innerText = grandTotals.y2.toLocaleString() + " JOD";
+        document.getElementById('totY3').innerText = grandTotals.y3.toLocaleString() + " JOD";
+        document.getElementById('tot3Y').innerText = grandTotals.tco.toLocaleString() + " JOD";
+
+        document.getElementById('manualEntryView').classList.add('hidden');
+        document.getElementById('resultsView').classList.remove('hidden');
+        
+        drawChart(chartLabels, chartDataTCO);
+    }
+
+    function drawChart(labels, data) {
+        document.getElementById('chartContainer').style.display = 'block';
+        const ctx = document.getElementById('tcoChart').getContext('2d');
+        if(dashboardChart) dashboardChart.destroy();
+
+        dashboardChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: '3-Year TCO (JOD)',
+                    data: data,
+                    backgroundColor: '#0d6efd',
+                    borderColor: '#0a58ca',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false, // Disabled animation so export captures instantly
+                plugins: { legend: { display: false }, title: { display: true, text: 'Entity 3-Year TCO Distribution' } },
+                scales: { y: { beginAtZero: true, title: { display: true, text: 'Cost (JOD)' } } }
+            }
+        });
+    }
+
+    function resetAll() {
+        if(confirm("Are you sure you want to reset all data?")) {
+            rawData = []; calculatedResults = [];
+            document.getElementById('uploadFile').value = '';
+            document.getElementById('totY1').innerText = "0 JOD";
+            document.getElementById('totY2').innerText = "0 JOD";
+            document.getElementById('totY3').innerText = "0 JOD";
+            document.getElementById('tot3Y').innerText = "0 JOD";
+            document.getElementById('resultsBody').innerHTML = '<tr><td colspan="7" class="text-center text-muted py-5">Tool Reset.</td></tr>';
+            document.getElementById('chartContainer').style.display = 'none';
+            if(dashboardChart) dashboardChart.destroy();
+            hideError();
+        }
+    }
+
+    function saveProjectLocally() {
+        if(rawData.length === 0) return;
+        const projectData = { data: rawData, tier: document.getElementById('priceTier').value, mode: document.getElementById('calcMode').value, base: document.getElementById('calcBase').value };
+        const blob = new Blob([JSON.stringify(projectData)], { type: "application/json" });
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = "TCO_Architect_Save.json"; a.click();
+    }
+
+    async function exportBeautifulExcel() {
+        if (calculatedResults.length === 0) { showError("Calculate data before exporting."); return; }
+        
+        const wb = new ExcelJS.Workbook();
+        
+        // SHEET 1: Data Model & Summary Table
+        const ws1 = wb.addWorksheet('TCO Data Model');
+        let columns = [ { header: 'Entity Name', key: 'entity', width: 35 }, { header: 'Base Seats', key: 'seats', width: 15 } ];
+        Object.keys(defaultPrices).forEach(lic => columns.push({ header: lic, key: lic, width: 12 }));
+        columns.push(
+            { header: 'Y1 Cost (JOD)', key: 'y1', width: 18 },
+            { header: 'Y2 Cost (JOD)', key: 'y2', width: 18 },
+            { header: 'Y3 Cost (JOD)', key: 'y3', width: 18 },
+            { header: 'Total TCO (JOD)', key: 'tco', width: 22 }
+        );
+        ws1.columns = columns;
+
+        ws1.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        ws1.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F243E' } };
+        ws1.getRow(1).alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+
+        calculatedResults.forEach((r, idx) => {
+            let rowObj = { entity: r.entity, seats: r.seats, y1: r.y1, y2: r.y2, y3: r.y3, tco: r.tco };
+            Object.keys(defaultPrices).forEach(lic => rowObj[lic] = r.alloc[lic] || 0);
+            const row = ws1.addRow(rowObj);
+            
+            if (idx % 2 === 1) row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
+            row.eachCell((cell, colNum) => {
+                cell.border = { top: {style:'thin', color:{argb:'FFDDDDDD'}}, bottom: {style:'thin', color:{argb:'FFDDDDDD'}} };
+                if (colNum > 2 && colNum <= Object.keys(defaultPrices).length + 2) { cell.alignment = { horizontal: 'center' }; if (cell.value === 0) cell.font = { color: { argb: 'FFCCCCCC' } }; }
+                if (colNum > Object.keys(defaultPrices).length + 2) { cell.numFmt = '#,##0.00" JOD"'; if (colNum === columns.length) cell.font = { bold: true }; }
+            });
+        });
+
+        // Main Grid Grand Total
+        const gtRow = ws1.addRow({ entity: 'GRAND TOTAL', y1: grandTotals.y1, y2: grandTotals.y2, y3: grandTotals.y3, tco: grandTotals.tco });
+        gtRow.font = { bold: true };
+        gtRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE2EFDA' } };
+        gtRow.eachCell((cell, colNum) => {
+            if (colNum > Object.keys(defaultPrices).length + 2) cell.numFmt = '#,##0.00" JOD"';
+            if (colNum === columns.length) cell.font = { bold: true, color: { argb: 'FFC00000' } };
+        });
+
+        // Add Financial Summary Table to the right
+        const sumCol = columns.length + 2;
+        ws1.getCell(2, sumCol).value = "Financial Summary";
+        ws1.getCell(2, sumCol).font = { bold: true, size: 12 };
+        
+        ws1.getCell(3, sumCol).value = "Year 1 Total";
+        ws1.getCell(3, sumCol + 1).value = grandTotals.y1;
+        ws1.getCell(3, sumCol + 1).numFmt = '#,##0.00" JOD"';
+
+        ws1.getCell(4, sumCol).value = "Year 2 Total";
+        ws1.getCell(4, sumCol + 1).value = grandTotals.y2;
+        ws1.getCell(4, sumCol + 1).numFmt = '#,##0.00" JOD"';
+
+        ws1.getCell(5, sumCol).value = "Year 3 Total";
+        ws1.getCell(5, sumCol + 1).value = grandTotals.y3;
+        ws1.getCell(5, sumCol + 1).numFmt = '#,##0.00" JOD"';
+
+        ws1.getCell(6, sumCol).value = "3-Year TCO";
+        ws1.getCell(6, sumCol).font = { bold: true };
+        ws1.getCell(6, sumCol + 1).value = grandTotals.tco;
+        ws1.getCell(6, sumCol + 1).numFmt = '#,##0.00" JOD"';
+        ws1.getCell(6, sumCol + 1).font = { bold: true, color: { argb: 'FFC00000' } };
+
+        ws1.getColumn(sumCol).width = 20;
+        ws1.getColumn(sumCol + 1).width = 22;
+        ws1.views = [{ state: 'frozen', xSplit: 2, ySplit: 1 }];
+
+        // SHEET 2: Chart Output
+        const ws2 = wb.addWorksheet('Dashboard Chart');
+        const canvas = document.getElementById('tcoChart');
+        
+        if (canvas) {
+            const imgData = canvas.toDataURL('image/png');
+            const imageId = wb.addImage({
+                base64: imgData,
+                extension: 'png',
+            });
+            // Embed the chart image into Sheet 2
+            ws2.addImage(imageId, {
+                tl: { col: 1, row: 1 },
+                ext: { width: 900, height: 450 }
+            });
+        }
+
+        const buffer = await wb.xlsx.writeBuffer();
+        const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+        const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = "Final_M365_TCO_Model.xlsx"; a.click();
+    }
+</script>
+</body>
+</html>
